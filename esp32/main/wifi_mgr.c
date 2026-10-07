@@ -24,6 +24,9 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_log.h"
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+#include "esp_netif_sntp.h"
+#endif
 #include "soc/soc_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -191,6 +194,17 @@ static void event_handler(void *arg, esp_event_base_t base,
         s_keep_connected = true;
         s_reconnect_backoff_ms = RECONNECT_BACKOFF_MIN_MS;  // reset on success
         xEventGroupSetBits(s_events, BIT_CONNECTED | BIT_GOT_IP);
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+        // Start SNTP once, on the first address; it re-syncs on its own.
+        static bool s_sntp_started;
+        if (!s_sntp_started) {
+            esp_sntp_config_t sntp_cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            sntp_cfg.wait_for_sync = false;
+            esp_err_t sntp_err = esp_netif_sntp_init(&sntp_cfg);
+            s_sntp_started = sntp_err == ESP_OK;
+            ESP_LOGI(TAG, "SNTP start: %s", esp_err_to_name(sntp_err));
+        }
+#endif
     }
 }
 

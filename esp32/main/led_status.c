@@ -49,6 +49,10 @@
 #if CONFIG_HOMEHUB_SD_CARD
 #include "sd_card.h"
 #endif
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+#include <stdlib.h>
+#include <time.h>
+#endif
 #include "esp_lcd_panel_st7789.h"
 #else
 #include "driver/i2c_master.h"
@@ -618,10 +622,125 @@ static void lcd_draw_anim_frame(const uint8_t *cells) {
     }
 }
 
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+// Clock under the animation: the time in the animation's pixel size plus one,
+// the date below it in the title's size.
+#define LCD_CLOCK_TIME_SCALE (LCD_ANIM_SCALE + 1)
+#define LCD_CLOCK_DATE_SCALE LCD_ANIM_SCALE
+#define LCD_CLOCK_TIME_Y (LCD_ANIM_Y + HAPPY_ANIM_HEIGHT * LCD_ANIM_SCALE + 16)
+#define LCD_CLOCK_DATE_Y (LCD_CLOCK_TIME_Y + PIXEL_FONT_HEIGHT * LCD_CLOCK_TIME_SCALE + 10)
+#define LCD_CLOCK_STRIPE_ROWS 8
+#define LCD_CLOCK_CHECK_MS 500
+_Static_assert(LCD_H_RES * LCD_CLOCK_STRIPE_ROWS <= LCD_ANIM_BUF_PIXELS,
+               "clock stripe must fit s_anim_buf");
+_Static_assert(LCD_CLOCK_DATE_Y + PIXEL_FONT_HEIGHT * LCD_CLOCK_DATE_SCALE
+               <= LCD_V_RES - LCD_BAR_ROWS, "clock must clear the bottom bar");
+
+// Draw one centred line of pixel font across the full width at row `y`,
+// clearing the rest of those rows. Shares s_anim_buf with the animation and
+// images, so each stripe is filled and sent under s_lcd_lock; skipped while an
+// image is shown. Animation task only.
+static void lcd_draw_text_line(const char *text, int y, int scale, uint16_t fg) {
+    const int adv = PIXEL_FONT_WIDTH + 1;
+    int n = (int)strlen(text);
+    if (n > (LCD_H_RES + scale) / (adv * scale)) n = (LCD_H_RES + scale) / (adv * scale);
+    int w = n > 0 ? n * adv * scale - scale : 0;
+    int x0 = (LCD_H_RES - w) / 2;
+    const int rows = PIXEL_FONT_HEIGHT * scale;
+    for (int sy = 0; sy < rows; sy += LCD_CLOCK_STRIPE_ROWS) {
+        int stripe = rows - sy < LCD_CLOCK_STRIPE_ROWS ? rows - sy : LCD_CLOCK_STRIPE_ROWS;
+        xSemaphoreTake(s_lcd_lock, portMAX_DELAY);
+        if (s_image_mode) {
+            xSemaphoreGive(s_lcd_lock);
+            return;
+        }
+        for (int r = 0; r < stripe; r++) {
+            uint16_t *line = s_anim_buf + r * LCD_H_RES;
+            int fy = sy + r;
+            for (int x = 0; x < LCD_H_RES; x++) {
+                int fx = x - x0;
+                bool on = false;
+                if (fx >= 0 && fx < w) {
+                    int col = fx / scale;
+                    int gx = col % adv;
+                    unsigned char ch = (unsigned char)text[col / adv];
+                    if (ch < PIXEL_FONT_FIRST || ch > PIXEL_FONT_LAST) ch = '?';
+                    on = gx < PIXEL_FONT_WIDTH &&
+                         (pixel_font[ch - PIXEL_FONT_FIRST][gx] >> (fy / scale) & 1);
+                }
+                line[x] = on ? fg : 0;
+            }
+        }
+        lcd_draw(0, y + sy, LCD_H_RES, y + sy + stripe, s_anim_buf);
+        xSemaphoreGive(s_lcd_lock);
+    }
+}
+
+// Squeeze runs of spaces (from %e and %l padding) and trim the ends.
+static void squeeze_spaces(char *s) {
+    char *out = s;
+    for (char *p = s; *p; p++) {
+        if (*p == ' ' && (out == s || out[-1] == ' ')) continue;
+        *out++ = *p;
+    }
+    if (out > s && out[-1] == ' ') out--;
+    *out = '\0';
+}
+
+// Redraw the clock when the minute changes or after an image is cleared.
+static void lcd_clock_tick(void) {
+    static char s_time_drawn[16], s_date_drawn[24];
+    xSemaphoreTake(s_lcd_lock, portMAX_DELAY);
+    bool image = s_image_mode;
+    xSemaphoreGive(s_lcd_lock);
+    if (image) {
+        // The image cleared the screen; draw again once it's gone.
+        s_time_drawn[0] = s_date_drawn[0] = '\0';
+        return;
+    }
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    if (tm.tm_year + 1900 < 2024) return;  // not synced yet
+    char t[16], d[24];
+#if CONFIG_HOMEHUB_CLOCK_24H
+    strftime(t, sizeof(t), "%H:%M", &tm);
+#else
+    strftime(t, sizeof(t), "%l:%M %p", &tm);
+#endif
+    strftime(d, sizeof(d), "%a %b %e", &tm);
+    squeeze_spaces(t);
+    squeeze_spaces(d);
+    uint16_t fg = lcd_px((rgb_t){0xff, 0xee, 0xde});  // animation's cream
+    if (strcmp(t, s_time_drawn) != 0) {
+        static bool s_logged;
+        if (!s_logged) {
+            s_logged = true;
+            ESP_LOGI(TAG, "clock synced: %s, %s", t, d);
+        }
+        lcd_draw_text_line(t, LCD_CLOCK_TIME_Y, LCD_CLOCK_TIME_SCALE, fg);
+        strcpy(s_time_drawn, t);
+    }
+    if (strcmp(d, s_date_drawn) != 0) {
+        lcd_draw_text_line(d, LCD_CLOCK_DATE_Y, LCD_CLOCK_DATE_SCALE, fg);
+        strcpy(s_date_drawn, d);
+    }
+}
+#endif
+
 static void anim_task(void *arg) {
     TickType_t wake = xTaskGetTickCount();
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+    TickType_t clock_checked = 0;
+#endif
     for (int frame = 0;; frame = (frame + 1) % HAPPY_ANIM_FRAMES) {
         lcd_draw_anim_frame(happy_anim_frames[frame]);
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+        if (xTaskGetTickCount() - clock_checked >= pdMS_TO_TICKS(LCD_CLOCK_CHECK_MS)) {
+            clock_checked = xTaskGetTickCount();
+            lcd_clock_tick();
+        }
+#endif
         xTaskDelayUntil(&wake, pdMS_TO_TICKS(HAPPY_ANIM_FRAME_MS));
     }
 }
@@ -910,9 +1029,18 @@ static bool led_hw_init(void) {
 #if CONFIG_HOMEHUB_SD_CARD && defined(SD_PIN_CS)
     sd_card_init(LCD_HOST, SD_PIN_CS);
 #endif
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+    setenv("TZ", CONFIG_HOMEHUB_CLOCK_TZ, 1);
+    tzset();
+#endif
 
     // Lower priority than the LED task so status changes are never delayed.
+#if CONFIG_HOMEHUB_STATUS_CLOCK
+    // localtime_r/strftime need more stack than the animation alone.
+    xTaskCreate(anim_task, "lcd_anim", 4096, NULL, 1, NULL);
+#else
     xTaskCreate(anim_task, "lcd_anim", 2560, NULL, 1, NULL);
+#endif
 
     ESP_LOGI(TAG, "LED status ready: " LCD_NAME " %dx%d display (BL=%d)",
              LCD_H_RES, LCD_V_RES, LCD_PIN_BL);

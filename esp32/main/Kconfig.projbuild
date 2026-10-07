@@ -264,6 +264,30 @@ menu "ESP32 Device SDK"
             switch is on, the button keeps its setup role (tap to confirm
             pairing, hold to reset).
 
+    config HOMEHUB_STATUS_CLOCK
+        bool "Show the date and time under the status animation"
+        depends on HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789
+        default y
+        help
+            Sync the clock over SNTP (pool.ntp.org) once Wi-Fi is up and draw
+            the time and date below the animation on the status screen. Blank
+            until the first sync.
+
+    config HOMEHUB_CLOCK_TZ
+        string "Clock time zone (POSIX TZ string)"
+        depends on HOMEHUB_STATUS_CLOCK
+        default "CST6CDT,M3.2.0,M11.1.0"
+        help
+            POSIX TZ rule for the status clock. The default is US Central
+            with daylight saving. Examples: EST5EDT,M3.2.0,M11.1.0 (US
+            Eastern), PST8PDT,M3.2.0,M11.1.0 (US Pacific), GMT0BST,M3.5.0/1,M10.5.0
+            (UK).
+
+    config HOMEHUB_CLOCK_24H
+        bool "24-hour clock"
+        depends on HOMEHUB_STATUS_CLOCK
+        default n
+
     config HOMEHUB_SD_CARD
         bool "microSD card on the display bus (sd.list, display.draw_file)"
         depends on HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789 && HOMEHUB_DISPLAY_COMMANDS
