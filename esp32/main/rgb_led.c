@@ -91,7 +91,11 @@ bool rgb_led_init(int gpio) {
         .strip_gpio_num = gpio,
         .max_leds = 1,
         .led_model = LED_MODEL_WS2812,
+#if CONFIG_HOMEHUB_RGB_LED_RED_FIRST
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_RGB,
+#else
         .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
+#endif
     };
     led_strip_rmt_config_t rmt_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,

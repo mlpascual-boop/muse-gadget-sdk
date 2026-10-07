@@ -274,6 +274,16 @@ menu "ESP32 Device SDK"
             Muse can override it with led.set (colour, solid/blink/breathe,
             brightness, optional timeout) and hand it back with led.clear.
 
+    config HOMEHUB_RGB_LED_RED_FIRST
+        bool "Onboard RGB LED takes red first (RGB order)"
+        depends on HOMEHUB_RGB_LED
+        default y
+        help
+            The Waveshare ESP32-C6-LCD-1.47's LED reads its colour bytes red
+            first, unlike the usual WS2812 green first (GRB): with GRB the
+            connected green glow shows red. Turn this off if red and green
+            come out swapped the other way.
+
     config HOMEHUB_STATUS_CLOCK
         bool "Show the date and time under the status animation"
         depends on HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789
