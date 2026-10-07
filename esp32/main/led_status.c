@@ -44,7 +44,11 @@
 #include "pixel_font.h"
 #if CONFIG_HOMEHUB_LED_BACKEND_IDEASPARK_ST7789 || CONFIG_HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789
 #include "driver/spi_master.h"
+#include "driver/ledc.h"
 #include "esp_lcd_panel_io.h"
+#if CONFIG_HOMEHUB_SD_CARD
+#include "sd_card.h"
+#endif
 #include "esp_lcd_panel_st7789.h"
 #else
 #include "driver/i2c_master.h"
@@ -173,6 +177,11 @@ static const char *TAG = "link.led";
 #define LCD_PIN_DC       15
 #define LCD_PIN_RST      21
 #define LCD_PIN_BL       22
+// Backlight brightness in percent, PWM-dimmed. Halved to cut heat (local change).
+#define LCD_BL_PERCENT   50
+// The microSD card shares the bus (SD_MISO/MOSI/SCLK) with its own select line.
+#define LCD_PIN_MISO     5
+#define SD_PIN_CS        4
 #define LCD_PCLK_HZ      (40 * 1000 * 1000)
 #define LCD_H_RES        172
 #define LCD_V_RES        320
@@ -624,7 +633,11 @@ static esp_err_t lcd_panel_init(void) {
     spi_bus_config_t bus_cfg = {
         .sclk_io_num = LCD_PIN_SCLK,
         .mosi_io_num = LCD_PIN_MOSI,
+#ifdef LCD_PIN_MISO
+        .miso_io_num = LCD_PIN_MISO,
+#else
         .miso_io_num = -1,
+#endif
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = LCD_ANIM_BUF_PIXELS * sizeof(uint16_t),
@@ -857,12 +870,46 @@ static bool led_hw_init(void) {
         return false;
     }
 
+#if defined(LCD_BL_PERCENT) && LCD_BL_PERCENT < 100
+    // Dim the backlight with PWM. Timer 1 / channel 3 stay clear of the
+    // RGB-LED backend, which uses timer 0 / channels 0-2.
+    ledc_timer_config_t bl_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LEDC_TIMER_1,
+        .freq_hz = 5000,
+        .clk_cfg = LEDC_AUTO_CLK,
+    };
+    ledc_channel_config_t bl_chan = {
+        .gpio_num = LCD_PIN_BL,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_3,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LEDC_TIMER_1,
+        .duty = (1023 * LCD_BL_PERCENT) / 100,
+        .hpoint = 0,
+    };
+    if (ledc_timer_config(&bl_timer) != ESP_OK || ledc_channel_config(&bl_chan) != ESP_OK) {
+        ESP_LOGW(TAG, "backlight PWM init failed; using full brightness");
+        gpio_config_t bl_cfg = {
+            .pin_bit_mask = 1ULL << LCD_PIN_BL,
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        gpio_config(&bl_cfg);
+        gpio_set_level(LCD_PIN_BL, 1);
+    }
+#else
     gpio_config_t bl_cfg = {
         .pin_bit_mask = 1ULL << LCD_PIN_BL,
         .mode = GPIO_MODE_OUTPUT,
     };
     gpio_config(&bl_cfg);
     gpio_set_level(LCD_PIN_BL, 1);
+#endif
+
+#if CONFIG_HOMEHUB_SD_CARD && defined(SD_PIN_CS)
+    sd_card_init(LCD_HOST, SD_PIN_CS);
+#endif
 
     // Lower priority than the LED task so status changes are never delayed.
     xTaskCreate(anim_task, "lcd_anim", 2560, NULL, 1, NULL);

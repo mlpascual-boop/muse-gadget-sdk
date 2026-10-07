@@ -63,6 +63,13 @@ typedef void (*image_fetch_done_cb)(const image_fetch_result_t *result, void *us
 bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
                        void *user, const char **code, const char **message);
 
+#if CONFIG_HOMEHUB_SD_CARD
+// Draw a JPEG or raw RGB565 file from the microSD card. `path` is the
+// absolute VFS path (see sd_card_resolve). Same callback and busy rules.
+bool image_fetch_start_file(const char *path, int row, image_fetch_done_cb done,
+                            void *user, const char **code, const char **message);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

@@ -68,6 +68,9 @@
 #if CONFIG_HOMEHUB_SENSECAP_SENSORS
 #include "sensecap_sensors.h"
 #endif
+#if CONFIG_HOMEHUB_SD_CARD
+#include "sd_card.h"
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
 #endif
@@ -1867,6 +1870,46 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(async, "_async", true);
         return async;
     }
+#if CONFIG_HOMEHUB_SD_CARD
+    if (strcmp(command, "display.draw_file") == 0) {
+        cJSON *path = cJSON_GetObjectItem(params, "path");
+        cJSON *row = cJSON_GetObjectItem(params, "row");
+        if (!cJSON_IsString(path) || !path->valuestring || !path->valuestring[0]) {
+            return command_error("missing_param", "path is required");
+        }
+        if (row && !cJSON_IsNumber(row)) return command_error("invalid_params", "row must be a number");
+        char full[192];
+        const char *why;
+        if (!sd_card_resolve(path->valuestring, full, sizeof(full), &why)) {
+            return command_error("invalid_params", why);
+        }
+        draw_url_ctx_t *ctx = calloc(1, sizeof(*ctx));
+        if (!ctx) return command_error("out_of_memory", "failed to allocate");
+        ctx->session_generation = session_generation;
+        strncpy(ctx->request_id, request_id, sizeof(ctx->request_id) - 1);
+        const char *code, *message;
+        if (!image_fetch_start_file(full, row ? row->valueint : IMAGE_FETCH_DEFAULT_ROW,
+                                    draw_url_done, ctx, &code, &message)) {
+            free(ctx);
+            return command_error(code, message);
+        }
+        cJSON *async = cJSON_CreateObject();
+        cJSON_AddBoolToObject(async, "_async", true);
+        return async;
+    }
+    if (strcmp(command, "sd.list") == 0) {
+        cJSON *path = cJSON_GetObjectItem(params, "path");
+        if (path && !cJSON_IsString(path)) return command_error("invalid_params", "path must be a string");
+        const char *code, *message;
+        if (!sd_card_list_start(path ? path->valuestring : "", session_generation, request_id,
+                                &code, &message)) {
+            return command_error(code, message);
+        }
+        cJSON *async = cJSON_CreateObject();
+        cJSON_AddBoolToObject(async, "_async", true);
+        return async;
+    }
+#endif
     if (strcmp(command, "display.show_animation") == 0) {
         led_status_show_animation();
         cJSON *result = cJSON_CreateObject();

@@ -264,6 +264,16 @@ menu "ESP32 Device SDK"
             switch is on, the button keeps its setup role (tap to confirm
             pairing, hold to reset).
 
+    config HOMEHUB_SD_CARD
+        bool "microSD card on the display bus (sd.list, display.draw_file)"
+        depends on HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789 && HOMEHUB_DISPLAY_COMMANDS
+        default y
+        help
+            Mount the Waveshare ESP32-C6-LCD-1.47's microSD card (FAT32 or
+            FAT16) at /sd over the SPI bus it shares with the LCD (MISO
+            GPIO5, CS GPIO4), and let Muse list it (sd.list) and draw a JPEG
+            or raw RGB565 file from it (display.draw_file).
+
     config HOMEHUB_SENSECAP_SENSORS
         bool "SenseCAP Indicator air sensors (sensors.read)"
         depends on HOMEHUB_LED_BACKEND_SENSECAP_ST7701

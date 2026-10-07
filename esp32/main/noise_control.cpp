@@ -1355,6 +1355,36 @@ static char *build_register_json(void) {
     }
 #endif
 
+#if CONFIG_HOMEHUB_SD_CARD
+    {
+        cJSON *list_optional = cJSON_CreateObject();
+        cJSON_AddItemToObject(list_optional, "path",
+                              string_param("Directory on the card, e.g. \"photos\"; default the root."));
+        add_command(commands, "sd.list",
+                    "List a directory on the microSD card: each entry's name, whether it "
+                    "is a directory and its size in bytes (at most 60 entries; truncated "
+                    "says if there were more), plus the card's total and free MB. "
+                    "Errors with no_card when no FAT32 card is inserted.",
+                    nullptr, list_optional);
+        cJSON *file_required = cJSON_CreateObject();
+        cJSON_AddItemToObject(file_required, "path",
+                              string_param("File on the card, e.g. \"photos/cat.jpg\"."));
+        cJSON *file_optional = cJSON_CreateObject();
+        cJSON *row_param = cJSON_CreateObject();
+        cJSON_AddStringToObject(row_param, "type", "integer");
+        cJSON_AddStringToObject(row_param, "description", "Row to draw the top of the image at; default 0.");
+        cJSON_AddItemToObject(file_optional, "row", row_param);
+        add_command(commands, "display.draw_file",
+                    "Draw an image stored on the microSD card on the screen, the same "
+                    "way as display.draw_url: a baseline JPEG (shrunk 1/2, 1/4 or 1/8 "
+                    "if needed) or raw RGB565 rows. Use sd.list to find files. "
+                    "display.show_animation brings the status screen back.",
+                    file_required, file_optional);
+        cJSON_AddNumberToObject(cJSON_GetObjectItem(commands, "display.draw_file"),
+                                "timeout_ms", 60000);
+    }
+#endif
+
 #if CONFIG_HOMEHUB_VOICE
     cJSON *volume_optional = cJSON_CreateObject();
     cJSON *volume_param = cJSON_CreateObject();

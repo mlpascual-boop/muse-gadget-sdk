@@ -67,6 +67,10 @@ set(GADGET_REQUIRES
     # is loaded, so this is unconditional; unused code is not linked.
     esp_driver_i2s
     esp_driver_pcnt
+    # microSD on the Waveshare C6 LCD board; unused code is not linked.
+    fatfs
+    sdmmc
+    esp_driver_sdspi
 )
 
 # E-paper has its own status screen in place of led_status.c.
@@ -87,6 +91,10 @@ endif()
 
 if(CONFIG_HOMEHUB_SENSECAP_SENSORS)
     list(APPEND GADGET_SRCS "sensecap_sensors.c")
+endif()
+
+if(CONFIG_HOMEHUB_SD_CARD)
+    list(APPEND GADGET_SRCS "sd_card.c")
 endif()
 
 if(CONFIG_HOMEHUB_VOICE)

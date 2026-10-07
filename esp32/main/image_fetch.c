@@ -35,6 +35,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "rom/tjpgd.h"
+#if CONFIG_HOMEHUB_SD_CARD
+#include "sd_card.h"
+#endif
 
 static const char *TAG = "link.image";
 
@@ -80,6 +83,9 @@ typedef struct {
     image_fetch_done_cb done;
     void *user;
     esp_http_client_handle_t http;
+    // Set when drawing a file from the microSD card instead of downloading.
+    FILE *file;
+    bool from_file;
     int width, height;
     // The scheme the task's stack and memory budget were sized for. Redirects
     // may not change it: TLS on the HTTP stack overflows it, and an HTTPS
@@ -153,6 +159,18 @@ static int fetch_read(fetch_t *f, uint8_t *buf, size_t len) {
         buf[have++] = f->peek[0];
         f->peek[0] = f->peek[1];
         f->peek_len--;
+    }
+    if (f->file) {
+        while (have < len && !f->eof) {
+            size_t n = fread(buf + have, 1, len - have, f->file);
+            if (n == 0) {
+                if (ferror(f->file)) return -1;
+                f->eof = true;
+            }
+            have += n;
+            f->bytes += n;
+        }
+        return (int)have;
     }
     while (have < len && !f->eof) {
         if (internal_free() < FETCH_FLOOR_BYTES) {
@@ -318,12 +336,67 @@ static esp_err_t open_following_redirects(fetch_t *f, int *status) {
     }
 }
 
+// Sniff the format from the first two bytes and draw it. Shared by downloads
+// and microSD files; fills in the result's format, size and outcome.
+static void decode_and_draw(fetch_t *f, image_fetch_result_t *result) {
+    int n = fetch_read(f, f->peek, sizeof(f->peek));
+    f->peek_len = n > 0 ? (size_t)n : 0;
+    const char *fail;
+    if (f->peek_len == 2 && f->peek[0] == 0xFF && f->peek[1] == 0xD8) {
+        result->format = "jpeg";
+        fail = draw_jpeg(f, &result->width, &result->height, &result->scale);
+    } else {
+        int rows = 0;
+        result->format = "rgb565";
+        result->width = f->width;
+        result->scale = 1;
+        fail = draw_raw(f, &rows);
+        result->height = rows;
+    }
+    // Show what arrived, even if the download broke off.
+    led_status_draw_done();
+    if (fail && f->timed_out) fail = "download timed out";
+    if (fail && f->from_file && strcmp(fail, "download failed") == 0) fail = "card read failed";
+    if (fail) {
+        result->message = fail;
+        if (f->low_memory) result->code = "out_of_memory";
+        else if (!f->timed_out && strcmp(fail, "download failed") != 0
+                 && strcmp(fail, "card read failed") != 0) {
+            result->code = "invalid_image";
+        }
+    } else {
+        result->ok = true;
+        result->code = NULL;
+    }
+}
+
 static void fetch_task(void *arg) {
     fetch_t *f = arg;
     int64_t start = esp_timer_get_time();
     f->deadline_us = start + FETCH_DEADLINE_MS * 1000LL;
     image_fetch_result_t result = { .code = "download_failed" };
     log_memory("image download start");
+
+#if CONFIG_HOMEHUB_SD_CARD
+    if (f->from_file) {
+        result.code = "card_error";
+        if (!sd_card_ensure_mounted()) {
+            result.code = "no_card";
+            result.message = "no microSD card mounted; insert a FAT32 card";
+        } else if (!(f->file = fopen(f->url, "rb"))) {
+            result.code = "not_found";
+            result.message = "no such file on the card";
+        } else {
+            decode_and_draw(f, &result);
+            bool read_error = ferror(f->file);
+            fclose(f->file);
+            f->file = NULL;
+            if (read_error) sd_card_unmount();
+            if (!result.ok && !strcmp(result.message, "card read failed")) result.code = "card_error";
+        }
+        goto finish;
+    }
+#endif
 
     esp_http_client_config_t cfg = {
         .url = f->url,
@@ -351,35 +424,12 @@ static void fetch_task(void *arg) {
         snprintf(msg, sizeof(msg), "server answered HTTP %d", status);
         result.message = msg;
     } else {
-        int n = fetch_read(f, f->peek, sizeof(f->peek));
-        f->peek_len = n > 0 ? (size_t)n : 0;
-        const char *fail;
-        if (f->peek_len == 2 && f->peek[0] == 0xFF && f->peek[1] == 0xD8) {
-            result.format = "jpeg";
-            fail = draw_jpeg(f, &result.width, &result.height, &result.scale);
-        } else {
-            int rows = 0;
-            result.format = "rgb565";
-            result.width = f->width;
-            result.scale = 1;
-            fail = draw_raw(f, &rows);
-            result.height = rows;
-        }
-        // Show what arrived, even if the download broke off.
-        led_status_draw_done();
-        if (fail && f->timed_out) fail = "download timed out";
-        if (fail) {
-            result.message = fail;
-            if (f->low_memory) result.code = "out_of_memory";
-            else if (!f->timed_out && strcmp(fail, "download failed") != 0) {
-                result.code = "invalid_image";
-            }
-        } else {
-            result.ok = true;
-            result.code = NULL;
-        }
+        decode_and_draw(f, &result);
     }
     if (f->http) esp_http_client_cleanup(f->http);
+#if CONFIG_HOMEHUB_SD_CARD
+finish:
+#endif
 
     result.bytes = f->bytes;
     result.ms = (int)((esp_timer_get_time() - start) / 1000);
@@ -460,6 +510,61 @@ bool image_fetch_start(const char *url, int row, image_fetch_done_cb done,
     }
     return true;
 }
+
+#if CONFIG_HOMEHUB_SD_CARD
+bool image_fetch_start_file(const char *path, int row, image_fetch_done_cb done,
+                            void *user, const char **code, const char **message) {
+    int width, height;
+    if (!led_status_display_info(&width, &height)) {
+        *code = "unsupported";
+        *message = "no display";
+        return false;
+    }
+    if (row < MIN_ROW || row >= height) {
+        *code = "invalid_params";
+        *message = "row is off the screen";
+        return false;
+    }
+    bool expected = false;
+    if (!atomic_compare_exchange_strong(&s_busy, &expected, true)) {
+        *code = "busy";
+        *message = "another image is still being drawn";
+        return false;
+    }
+    if (internal_free() < FETCH_STACK_BYTES + FETCH_RESERVE_BYTES + 4096
+        || heap_caps_get_largest_free_block(BYTE_CAPS) < FETCH_STACK_BYTES) {
+        log_memory("image file refused");
+        atomic_store(&s_busy, false);
+        *code = "out_of_memory";
+        *message = "not enough free memory to draw a file";
+        return false;
+    }
+    fetch_t *f = calloc(1, sizeof(*f));
+    if (f) f->url = strdup(path);
+    if (!f || !f->url) {
+        free(f);
+        atomic_store(&s_busy, false);
+        *code = "out_of_memory";
+        *message = "failed to allocate";
+        return false;
+    }
+    f->from_file = true;
+    f->row = row;
+    f->done = done;
+    f->user = user;
+    f->width = width;
+    f->height = height;
+    if (xTaskCreate(fetch_task, "image", FETCH_STACK_BYTES, f, 4, NULL) != pdPASS) {
+        free(f->url);
+        free(f);
+        atomic_store(&s_busy, false);
+        *code = "out_of_memory";
+        *message = "failed to start the drawing task";
+        return false;
+    }
+    return true;
+}
+#endif
 
 #else
 
