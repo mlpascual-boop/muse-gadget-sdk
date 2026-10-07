@@ -53,6 +53,9 @@
 #include <stdlib.h>
 #include <time.h>
 #endif
+#if CONFIG_HOMEHUB_RGB_LED
+#include "rgb_led.h"
+#endif
 #include "esp_lcd_panel_st7789.h"
 #else
 #include "driver/i2c_master.h"
@@ -186,6 +189,8 @@ static const char *TAG = "link.led";
 // The microSD card shares the bus (SD_MISO/MOSI/SCLK) with its own select line.
 #define LCD_PIN_MISO     5
 #define SD_PIN_CS        4
+// Onboard WS2812 RGB LED.
+#define RGB_LED_GPIO     8
 #define LCD_PCLK_HZ      (40 * 1000 * 1000)
 #define LCD_H_RES        172
 #define LCD_V_RES        320
@@ -527,6 +532,9 @@ static void lcd_clear_rows(int y0, int y1) {
 }
 
 static void led_hw_set_color(rgb_t c) {
+#if CONFIG_HOMEHUB_RGB_LED
+    rgb_led_status(c.r, c.g, c.b);
+#endif
     if (!s_panel) return;
     if (s_dot_drawn) lcd_draw_dot(false);
     if (s_bars_drawn && memcmp(&c, &s_bar_color, sizeof(c)) == 0) return;
@@ -544,9 +552,13 @@ static void led_hw_set_color(rgb_t c) {
 
 // Connected: blank the bars and show the green dot instead.
 static void led_hw_set_connected(void) {
-    if (!s_panel || s_dot_drawn) return;
-    led_hw_set_color(COLOR_OFF);
-    lcd_draw_dot(true);
+    if (s_panel && !s_dot_drawn) {
+        led_hw_set_color(COLOR_OFF);
+        lcd_draw_dot(true);
+    }
+#if CONFIG_HOMEHUB_RGB_LED
+    rgb_led_status(0, 24, 0);  // a dim green glow, not the full status green
+#endif
 }
 
 // Draw `text` centred in the title area, shrinking the pixel size for long
@@ -1028,6 +1040,9 @@ static bool led_hw_init(void) {
 
 #if CONFIG_HOMEHUB_SD_CARD && defined(SD_PIN_CS)
     sd_card_init(LCD_HOST, SD_PIN_CS);
+#endif
+#if CONFIG_HOMEHUB_RGB_LED && defined(RGB_LED_GPIO)
+    rgb_led_init(RGB_LED_GPIO);
 #endif
 #if CONFIG_HOMEHUB_STATUS_CLOCK
     setenv("TZ", CONFIG_HOMEHUB_CLOCK_TZ, 1);

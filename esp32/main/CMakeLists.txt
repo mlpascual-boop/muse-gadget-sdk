@@ -97,6 +97,11 @@ if(CONFIG_HOMEHUB_SD_CARD)
     list(APPEND GADGET_SRCS "sd_card.c")
 endif()
 
+if(CONFIG_HOMEHUB_RGB_LED)
+    list(APPEND GADGET_SRCS "rgb_led.c")
+    list(APPEND GADGET_REQUIRES led_strip)
+endif()
+
 if(CONFIG_HOMEHUB_VOICE)
     list(APPEND GADGET_SRCS
         "voice.c"

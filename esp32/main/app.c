@@ -71,6 +71,9 @@
 #if CONFIG_HOMEHUB_SD_CARD
 #include "sd_card.h"
 #endif
+#if CONFIG_HOMEHUB_RGB_LED
+#include "rgb_led.h"
+#endif
 #if CONFIG_MUSE_WATCHER_CAMERA
 #include "boards/watcher_camera.h"
 #endif
@@ -1870,6 +1873,56 @@ static cJSON *on_ws_command(
         cJSON_AddBoolToObject(async, "_async", true);
         return async;
     }
+#if CONFIG_HOMEHUB_RGB_LED
+    if (strcmp(command, "led.set") == 0) {
+        cJSON *color = cJSON_GetObjectItem(params, "color");
+        cJSON *effect = cJSON_GetObjectItem(params, "effect");
+        cJSON *bright = cJSON_GetObjectItem(params, "brightness");
+        cJSON *secs = cJSON_GetObjectItem(params, "seconds");
+        uint8_t r, g, b;
+        if (!cJSON_IsString(color) || !color->valuestring) {
+            return command_error("missing_param", "color is required");
+        }
+        if (!rgb_led_parse_color(color->valuestring, &r, &g, &b)) {
+            return command_error("invalid_params", "color must be a known name or #RRGGBB");
+        }
+        rgb_led_effect_t fx = RGB_LED_SOLID;
+        if (effect) {
+            if (!cJSON_IsString(effect) || !effect->valuestring) {
+                return command_error("invalid_params", "effect must be a string");
+            }
+            if (strcasecmp(effect->valuestring, "blink") == 0) fx = RGB_LED_BLINK;
+            else if (strcasecmp(effect->valuestring, "breathe") == 0) fx = RGB_LED_BREATHE;
+            else if (strcasecmp(effect->valuestring, "solid") != 0) {
+                return command_error("invalid_params", "effect must be solid, blink or breathe");
+            }
+        }
+        int pct = 50;
+        if (bright) {
+            if (!cJSON_IsNumber(bright) || bright->valuedouble < 1 || bright->valuedouble > 100) {
+                return command_error("invalid_params", "brightness must be 1-100");
+            }
+            pct = bright->valueint;
+        }
+        uint32_t seconds = 0;
+        if (secs) {
+            if (!cJSON_IsNumber(secs) || secs->valuedouble < 0 || secs->valuedouble > 86400) {
+                return command_error("invalid_params", "seconds must be 0-86400");
+            }
+            seconds = (uint32_t)secs->valuedouble;
+        }
+        rgb_led_override(r, g, b, fx, pct, seconds);
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+    if (strcmp(command, "led.clear") == 0) {
+        rgb_led_clear();
+        cJSON *result = cJSON_CreateObject();
+        cJSON_AddBoolToObject(result, "ok", true);
+        return result;
+    }
+#endif
 #if CONFIG_HOMEHUB_SD_CARD
     if (strcmp(command, "display.draw_file") == 0) {
         cJSON *path = cJSON_GetObjectItem(params, "path");

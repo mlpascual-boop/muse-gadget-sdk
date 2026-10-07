@@ -1355,6 +1355,35 @@ static char *build_register_json(void) {
     }
 #endif
 
+#if CONFIG_HOMEHUB_RGB_LED
+    {
+        cJSON *led_required = cJSON_CreateObject();
+        cJSON_AddItemToObject(led_required, "color",
+                              string_param("A name (red, green, blue, yellow, orange, purple, "
+                                           "pink, white, cyan, magenta, off) or #RRGGBB."));
+        cJSON *led_optional = cJSON_CreateObject();
+        cJSON_AddItemToObject(led_optional, "effect",
+                              string_param("solid (default), blink or breathe."));
+        cJSON *bright = cJSON_CreateObject();
+        cJSON_AddStringToObject(bright, "type", "integer");
+        cJSON_AddStringToObject(bright, "description", "1-100 percent; default 50.");
+        cJSON_AddItemToObject(led_optional, "brightness", bright);
+        cJSON *secs = cJSON_CreateObject();
+        cJSON_AddStringToObject(secs, "type", "integer");
+        cJSON_AddStringToObject(secs, "description",
+                                "How long to hold it, up to 86400; omit or 0 to hold until led.clear.");
+        cJSON_AddItemToObject(led_optional, "seconds", secs);
+        add_command(commands, "led.set",
+                    "Set the gadget's RGB light as a notification. It normally shows "
+                    "connection status (dim green when connected); this overrides "
+                    "that until the time runs out or led.clear.",
+                    led_required, led_optional);
+        add_command(commands, "led.clear",
+                    "Hand the RGB light back to showing connection status.",
+                    nullptr, nullptr);
+    }
+#endif
+
 #if CONFIG_HOMEHUB_SD_CARD
     {
         cJSON *list_optional = cJSON_CreateObject();

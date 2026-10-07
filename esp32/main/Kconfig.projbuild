@@ -264,6 +264,16 @@ menu "ESP32 Device SDK"
             switch is on, the button keeps its setup role (tap to confirm
             pairing, hold to reset).
 
+    config HOMEHUB_RGB_LED
+        bool "Onboard RGB LED: status colours, Muse control (led.set, led.clear)"
+        depends on HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789
+        default y
+        help
+            Drive the Waveshare ESP32-C6-LCD-1.47's WS2812 LED on GPIO8. It
+            mirrors the status colours (a dim green glow when connected), and
+            Muse can override it with led.set (colour, solid/blink/breathe,
+            brightness, optional timeout) and hand it back with led.clear.
+
     config HOMEHUB_STATUS_CLOCK
         bool "Show the date and time under the status animation"
         depends on HOMEHUB_LED_BACKEND_WAVESHARE_C6_ST7789
